@@ -1,12 +1,5 @@
 from setuptools import setup, find_packages
 
-try:
-    import torch
-    import torch_geometric
-except Exception:
-    raise Exception('Please install PyTorch and PyTorch Geometric manually first.\n' +
-                    'View CRSLab GitHub page for more information: https://github.com/RUCAIBox/CRSLab')
-
 setup_requires = []
 
 install_requires = [
