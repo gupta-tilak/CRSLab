@@ -4,7 +4,7 @@
 
 import os
 from crslab.evaluator.metrics import gen
-from numpy.core.numeric import NaN
+from numpy import nan
 
 import torch
 from loguru import logger
