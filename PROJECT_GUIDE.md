@@ -1,12 +1,15 @@
 # CRSLab: Complete Project Guide
-> MacBook Air M2 Setup + Full Architecture Deep-Dive
+> Cross-Platform Setup (macOS M2 · Linux · Windows) + Full Architecture Deep-Dive
 
 ---
 
 ## Table of Contents
 
 1. [What is CRSLab?](#1-what-is-crslab)
-2. [Environment Setup (MacBook Air M2)](#2-environment-setup-macbook-air-m2)
+2. [Environment Setup](#2-environment-setup)
+   - [macOS (Apple Silicon M2)](#21-macos-apple-silicon-m2)
+   - [Linux (Ubuntu / Debian)](#22-linux-ubuntu--debian)
+   - [Windows](#23-windows)
 3. [Installing Dependencies](#3-installing-dependencies)
 4. [Project Structure](#4-project-structure)
 5. [Component Deep-Dive](#5-component-deep-dive)
@@ -22,7 +25,7 @@
 9. [Configuration Files Explained](#9-configuration-files-explained)
 10. [Running the Project](#10-running-the-project)
 11. [Evaluation Metrics](#11-evaluation-metrics)
-12. [Troubleshooting on M2](#12-troubleshooting-on-m2)
+12. [Troubleshooting](#12-troubleshooting)
 
 ---
 
@@ -66,11 +69,15 @@ User: "I want something like Inception but lighter"
 
 ---
 
-## 2. Environment Setup (MacBook Air M2)
+## 2. Environment Setup
 
-The project targets Python 3.7.17 (see `.python-version`), but several pinned packages lack native Apple Silicon (arm64) wheels for that version. **The recommended approach is Python 3.9 with Miniforge**, which gives you native arm64 performance without Rosetta emulation.
+The project targets Python 3.7.17 (see `.python-version`), but several pinned packages lack native binary wheels for that version on all platforms. **The recommended approach is Python 3.9 with Miniforge/Miniconda** — it avoids binary compatibility issues on all operating systems.
 
-### Step 1 — Install Miniforge (arm64 Conda)
+---
+
+### 2.1 macOS (Apple Silicon M2)
+
+#### Step 1 — Install Miniforge (arm64 Conda)
 
 Miniforge is the recommended Python distribution for Apple Silicon — it uses conda-forge packages compiled natively for arm64.
 
@@ -85,7 +92,7 @@ bash miniforge.sh
 source ~/.zshrc
 ```
 
-### Step 2 — Create a Dedicated Conda Environment
+#### Step 2 — Create a Dedicated Conda Environment
 
 ```bash
 conda create -n crslab python=3.9 -y
@@ -95,7 +102,7 @@ conda activate crslab
 > **Why 3.9 and not 3.7?**
 > Python 3.7 does not have native arm64 binary wheels for packages like numpy, fasttext, and sentencepiece on PyPI. Python 3.9 has full arm64 support and is backward-compatible with this codebase (which only requires Python >= 3.6).
 
-### Step 3 — Install Xcode Command Line Tools (required for C extensions)
+#### Step 3 — Install Xcode Command Line Tools (required for C extensions)
 
 ```bash
 xcode-select --install
@@ -103,24 +110,136 @@ xcode-select --install
 
 ---
 
+### 2.2 Linux (Ubuntu / Debian)
+
+Tested on Ubuntu 20.04 and 22.04. Other Debian-based distributions should work the same way.
+
+#### Step 1 — Install System Build Tools
+
+```bash
+sudo apt update
+sudo apt install -y build-essential git cmake curl wget pkg-config \
+    libsentencepiece-dev
+```
+
+#### Step 2 — Install Miniforge (x86_64 or aarch64)
+
+```bash
+# Detect architecture automatically and download the right installer
+ARCH=$(uname -m)
+curl -L "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-${ARCH}.sh" -o miniforge.sh
+
+# Run the installer
+bash miniforge.sh -b -p "$HOME/miniforge3"
+
+# Initialise conda in your shell
+"$HOME/miniforge3/bin/conda" init bash
+source ~/.bashrc
+```
+
+> If you use zsh, replace `bash` with `zsh` in the `conda init` call and source `~/.zshrc`.
+
+#### Step 3 — Create and Activate the Environment
+
+```bash
+conda create -n crslab python=3.9 -y
+conda activate crslab
+```
+
+> **NVIDIA GPU users:** if you have a CUDA-capable GPU, install the matching CUDA toolkit via `sudo apt install nvidia-cuda-toolkit` (or use the official NVIDIA runfile installer) before installing PyTorch in section 3. Section 3 covers how to select a CUDA-enabled PyTorch wheel.
+
+---
+
+### 2.3 Windows
+
+Tested on Windows 10 / 11 (64-bit). Use **PowerShell** or **Git Bash** for all commands below.
+
+#### Step 1 — Install Miniforge
+
+1. Download the Windows installer from the [Miniforge releases page](https://github.com/conda-forge/miniforge/releases/latest) — pick `Miniforge3-Windows-x86_64.exe`.
+2. Run the installer. When prompted:
+   - Choose **"Just Me"** (avoids admin requirements).
+   - Check **"Add Miniforge3 to my PATH environment variable"** (or use the Miniforge Prompt shortcut).
+
+Open a new **Miniforge Prompt** (Start menu) after installation.
+
+#### Step 2 — Install Microsoft C++ Build Tools (required for C extensions)
+
+Several packages (fasttext, sentencepiece, pkuseg) compile C/C++ code during installation.
+
+1. Download [Visual Studio Build Tools 2022](https://visualstudio.microsoft.com/visual-cpp-build-tools/).
+2. In the installer, select the **"Desktop development with C++"** workload.
+3. Restart your terminal after installation.
+
+#### Step 3 — Create and Activate the Environment
+
+```powershell
+conda create -n crslab python=3.9 -y
+conda activate crslab
+```
+
+> If `conda activate` is not recognised in PowerShell, run:
+> ```powershell
+> conda init powershell
+> ```
+> Then restart PowerShell and try again.
+
+---
+
 ## 3. Installing Dependencies
 
-### Step 1 — Install PyTorch (M2 native, with MPS support)
+### Step 1 — Install PyTorch
 
-PyTorch has supported Apple Silicon's Metal Performance Shaders (MPS) backend since version 1.12. Install the latest stable version:
+The correct install command depends on your platform and whether you have a GPU.
+
+**macOS (Apple Silicon M2 — MPS backend)**
 
 ```bash
 pip install torch torchvision torchaudio
 ```
 
-Verify MPS is available (this is Apple's GPU equivalent of CUDA):
+Verify MPS is available:
 
 ```python
 import torch
 print(torch.backends.mps.is_available())  # Should print: True
 ```
 
-> **Note on GPU in CRSLab:** CRSLab uses the `--gpu` flag to select a CUDA device. On M2, pass `--gpu -1` (CPU mode) or modify the device selection — MPS is not directly mapped by the framework. CPU mode is sufficient for experimentation.
+> **Note on GPU in CRSLab:** CRSLab uses the `--gpu` flag to select a CUDA device. On M2, pass `--gpu -1` (CPU mode) — MPS is not directly mapped by the framework. CPU mode is sufficient for experimentation.
+
+**Linux — CPU only**
+
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+```
+
+**Linux — NVIDIA GPU (CUDA 12.1 example)**
+
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+Replace `cu121` with `cu118` for CUDA 11.8, etc. Check [pytorch.org/get-started](https://pytorch.org/get-started/locally/) for the exact command matching your CUDA version.
+
+Verify CUDA is available:
+
+```python
+import torch
+print(torch.cuda.is_available())   # Should print: True
+print(torch.cuda.get_device_name(0))
+```
+
+**Windows — CPU only**
+
+```powershell
+pip install torch torchvision torchaudio
+```
+
+**Windows — NVIDIA GPU (CUDA 12.1 example)**
+
+```powershell
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
 
 ### Step 2 — Install PyTorch Geometric (for Graph Neural Network models)
 
@@ -186,13 +305,17 @@ python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords')"
 From the project root directory:
 
 ```bash
-cd /Users/tilakgupta/Desktop/CRSLab
+# Navigate to wherever you cloned the repo, e.g.:
+#   macOS/Linux: cd ~/Desktop/CRSLab
+#   Windows:     cd C:\Users\<you>\Desktop\CRSLab
 
 # Install in editable/development mode (so you can modify source)
-pip install -e . --no-deps
+pip install -e . --no-deps --no-build-isolation
 ```
 
 > `--no-deps` skips re-installing the pinned dependencies from setup.py since you already installed compatible versions above.
+>
+> `--no-build-isolation` is required because `setup.py` imports `torch` and `torch_geometric` at the top level to validate they are present. Newer pip (25+) runs the build in an isolated subprocess where conda-env packages are not visible, causing a `ModuleNotFoundError: No module named 'torch'` even when torch is correctly installed. This flag disables that isolation so the build uses your active environment.
 
 ### Verify Installation
 
@@ -891,9 +1014,9 @@ Given a list of recommended items ranked by score, and the ground truth item(s):
 
 ---
 
-## 12. Troubleshooting on M2
+## 12. Troubleshooting
 
-### `fasttext` fails to install
+### macOS (M2) — `fasttext` fails to install
 
 ```bash
 # Try the prebuilt wheel fork
@@ -903,7 +1026,7 @@ pip install fasttext-wheel
 conda install -c conda-forge fasttext
 ```
 
-### `sentencepiece` build errors
+### macOS — `sentencepiece` build errors
 
 ```bash
 # Install system-level sentencepiece library first
@@ -911,7 +1034,7 @@ brew install sentencepiece
 pip install sentencepiece
 ```
 
-### `numpy` version conflict
+### All platforms — `numpy` version conflict
 
 The project pins `numpy~=1.19.4` but M2 native wheels start from ~1.21. Use a newer compatible version:
 
@@ -921,7 +1044,7 @@ pip install "numpy>=1.21,<2.0"
 
 Then if you see a `numpy` version warning when running the project, it's safe to ignore — the API used here is compatible.
 
-### `torch_geometric` import errors
+### All platforms — `torch_geometric` import errors
 
 ```bash
 # Reinstall with explicit version matching
@@ -933,7 +1056,7 @@ pip install torch-scatter torch-sparse torch-cluster torch-spline-conv \
 pip install torch-geometric
 ```
 
-### `pkuseg` or Chinese tokenizer errors
+### All platforms — `pkuseg` or Chinese tokenizer errors
 
 `pkuseg` is only needed for Chinese datasets (TG-ReDial, DuRecDial). If you're only using English datasets, you can skip it.
 
@@ -942,17 +1065,82 @@ pip install torch-geometric
 pip install pkuseg --no-build-isolation
 ```
 
-### GPU not recognized (MPS)
+### macOS — GPU not recognized (MPS)
 
 CRSLab uses CUDA-style GPU indexing. On M2, pass `--gpu -1` to use CPU. If you want to experiment with MPS, you would need to modify [crslab/config/config.py](crslab/config/config.py) to map device appropriately — this is a code change, not a config change.
 
-### Data download failures
+### Linux — CUDA device not found
+
+If `torch.cuda.is_available()` returns `False`:
+
+```bash
+# Check that your driver and CUDA toolkit versions match
+nvidia-smi           # shows driver version
+nvcc --version       # shows toolkit version
+
+# Reinstall PyTorch with the correct CUDA index URL
+pip uninstall torch torchvision torchaudio -y
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+Pass the GPU index to CRSLab with `--gpu 0` (or `0,1` for multi-GPU).
+
+### Linux — `libstdc++` / `GLIBCXX` version errors
+
+Occurs when conda's bundled libstdc++ is older than the one used to compile a wheel:
+
+```bash
+conda install -c conda-forge libstdcxx-ng -y
+```
+
+### Windows — C++ compiler not found during `pip install`
+
+If you see `error: Microsoft Visual C++ 14.0 or greater is required`:
+
+1. Make sure **Visual Studio Build Tools** are installed (see section 2.3 Step 2).
+2. Open a **Developer Command Prompt for VS** or the **Miniforge Prompt** which inherits the VS environment, then retry.
+3. Alternatively, install the package via conda-forge which ships pre-built binaries:
+   ```powershell
+   conda install -c conda-forge sentencepiece fasttext -y
+   ```
+
+### Windows — `fasttext` build failure
+
+```powershell
+# Use the pre-built wheel fork
+pip install fasttext-wheel
+
+# Or install via conda-forge (no compilation needed)
+conda install -c conda-forge fasttext -y
+```
+
+### Windows — long path errors (`FileNotFoundError`)
+
+Windows limits paths to 260 characters by default. Enable long path support:
+
+1. Open **Group Policy Editor** (`gpedit.msc`) → Computer Configuration → Administrative Templates → System → Filesystem → Enable **Win32 long paths**.
+2. Or run this in an **elevated** PowerShell:
+   ```powershell
+   Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+       -Name LongPathsEnabled -Value 1
+   ```
+
+### Windows — `pkuseg` segmentation fault
+
+```powershell
+# Install the pure-Python fallback
+pip install pkuseg --no-build-isolation
+```
+
+If it still crashes, switch to using English-only datasets (`ReDial`, `OpenDialKG`, `INSPIRED`) which do not depend on `pkuseg`.
+
+### All platforms — Data download failures
 
 If auto-download fails (network issues or changed URLs), you can manually download datasets. Check [crslab/data/dataset/redial/](crslab/data/dataset/redial/) for the URL and expected MD5 in each dataset's `__init__.py`.
 
-### Memory issues during training
+### All platforms — Memory issues during training
 
-On M2 MacBook Air (8GB RAM), reduce batch size in the YAML config:
+On memory-constrained machines (e.g. 8 GB RAM), reduce batch size in the YAML config:
 
 ```yaml
 rec:
@@ -966,7 +1154,7 @@ conv:
 ## Quick Reference Card
 
 ```
-Project root: /Users/tilakgupta/Desktop/CRSLab/
+Project root: wherever you cloned the repo (e.g. ~/Desktop/CRSLab/ on macOS/Linux)
 
 Entry point:       run_crslab.py
 Config files:      config/crs/<model>/<dataset>.yaml
