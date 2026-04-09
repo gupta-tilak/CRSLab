@@ -155,4 +155,4 @@ class GreedyMatch(AverageMetric):
         for ref_emb in ref_embs:
             sim_mat = cosine_similarity(hyp_emb, ref_emb)
             score_max = max(score_max, (sim_mat.max(axis=0).mean() + sim_mat.max(axis=1).mean()) / 2)
-        return GreedyMatch(score_max)
+        return GreedyMatch(float(score_max))
