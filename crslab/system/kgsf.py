@@ -7,8 +7,6 @@
 # @Author : Kun Zhou, Xiaolei Wang
 # @Email  : francis_kun_zhou@163.com, wxl1999@foxmail.com
 
-import os
-
 import torch
 from loguru import logger
 
@@ -152,10 +150,8 @@ class KGSFSystem(BaseSystem):
             self.evaluator.report(mode='test')
 
     def train_conversation(self):
-        if os.environ["CUDA_VISIBLE_DEVICES"] == '-1':
-            self.model.freeze_parameters()
-        else:
-            self.model.module.freeze_parameters()
+        model = self.model.module if hasattr(self.model, 'module') else self.model
+        model.freeze_parameters()
         self.init_optim(self.conv_optim_opt, self.model.parameters())
 
         for epoch in range(self.conv_epoch):
