@@ -125,5 +125,22 @@ class KGSFDataLoader(BaseDataLoader):
                 padded_tensor(batch_context_words, self.pad_word_idx, pad_tail=False),
                 padded_tensor(batch_response, self.pad_token_idx))
 
+    def rec_interact(self, data):
+        context_entities = [truncate(data['context_entities'], self.entity_truncate, truncate_tail=False)]
+        context_words = [truncate(data['context_words'], self.word_truncate, truncate_tail=False)]
+        return (padded_tensor(context_entities, self.pad_entity_idx, pad_tail=False),
+                padded_tensor(context_words, self.pad_word_idx, pad_tail=False),
+                get_onehot(context_entities, self.n_entity),
+                torch.zeros(1, dtype=torch.long))
+
+    def conv_interact(self, data):
+        context_tokens = [truncate(merge_utt(data['context_tokens']), self.context_truncate, truncate_tail=False)]
+        context_entities = [truncate(data['context_entities'], self.entity_truncate, truncate_tail=False)]
+        context_words = [truncate(data['context_words'], self.word_truncate, truncate_tail=False)]
+        return (padded_tensor(context_tokens, self.pad_token_idx, pad_tail=False),
+                padded_tensor(context_entities, self.pad_entity_idx, pad_tail=False),
+                padded_tensor(context_words, self.pad_word_idx, pad_tail=False),
+                torch.zeros(1, 1, dtype=torch.long))
+
     def policy_batchify(self, *args, **kwargs):
         pass

@@ -10,6 +10,7 @@
 import torch
 from loguru import logger
 
+from crslab.data import get_dataloader, dataset_language_map
 from crslab.evaluator.metrics.base import AverageMetric
 from crslab.evaluator.metrics.gen import PPLMetric
 from crslab.system.base import BaseSystem
@@ -42,6 +43,8 @@ class KGSFSystem(BaseSystem):
         self.ind2tok = vocab['ind2tok']
         self.end_token_idx = vocab['end']
         self.item_ids = side_data['item_entity_ids']
+        self.id2entity = vocab['id2entity']
+        self.language = dataset_language_map[self.opt['dataset']]
 
         self.pretrain_optim_opt = self.opt['pretrain']
         self.rec_optim_opt = self.opt['rec']
@@ -182,4 +185,59 @@ class KGSFSystem(BaseSystem):
         self.train_conversation()
 
     def interact(self):
-        pass
+        self.init_interact()
+        dataloader = get_dataloader(self.opt, None, self.vocab)
+        input_text = self.get_input(self.language)
+        while not self.finished:
+            # Convert user input to token/entity/word IDs
+            token_ids, entity_ids, movie_ids, word_ids = self._convert_to_id(input_text)
+            self.update_context('rec', token_ids, entity_ids, movie_ids, word_ids)
+            self.update_context('conv', token_ids, entity_ids, movie_ids, word_ids)
+
+            # Recommendation
+            rec_data = {
+                'context_entities': self.context['rec']['context_entities'],
+                'context_words': self.context['rec']['context_words'],
+            }
+            rec_batch = [ele.to(self.device) if isinstance(ele, torch.Tensor) else ele
+                         for ele in dataloader.rec_interact(rec_data)]
+            with torch.no_grad():
+                _, _, rec_scores = self.model.forward(rec_batch, 'rec', 'test')
+            rec_scores = rec_scores.cpu()[0]
+            rec_scores = rec_scores[self.item_ids]
+            _, rank = torch.topk(rec_scores, 10, dim=-1)
+            item_ids = [self.item_ids[r] for r in rank.tolist()]
+            self.update_context('rec', entity_ids=item_ids[:1], item_ids=item_ids[:1])
+            print("[Recommend]:")
+            for item_id in item_ids:
+                if item_id in self.id2entity:
+                    print(self.id2entity[item_id])
+
+            # Conversation
+            conv_data = {
+                'context_tokens': self.context['conv']['context_tokens'],
+                'context_entities': self.context['conv']['context_entities'],
+                'context_words': self.context['conv']['context_words'],
+            }
+            conv_batch = [ele.to(self.device) if isinstance(ele, torch.Tensor) else ele
+                          for ele in dataloader.conv_interact(conv_data)]
+            with torch.no_grad():
+                preds = self.model.forward(conv_batch, 'conv', 'test')
+            preds = preds.tolist()[0]
+            p_str = ind2txt(preds, self.ind2tok, self.end_token_idx)
+            resp_token_ids, resp_entity_ids, resp_movie_ids, resp_word_ids = self._convert_to_id(p_str)
+            self.update_context('conv', resp_token_ids, resp_entity_ids, resp_movie_ids, resp_word_ids)
+            print(f"[Response]:\n{p_str}")
+
+            input_text = self.get_input(self.language)
+
+    def _convert_to_id(self, text):
+        tokens = self.tokenize(text, 'nltk')
+        entities = self.link(tokens, self.side_data['entity_kg']['entity'])
+        words = self.link(tokens, self.side_data['word_kg']['entity'])
+        token_ids = [self.vocab['tok2ind'].get(token, self.vocab['unk']) for token in tokens]
+        entity_ids = [self.vocab['entity2id'][entity] for entity in entities
+                      if entity in self.vocab['entity2id']]
+        movie_ids = [eid for eid in entity_ids if eid in self.item_ids]
+        word_ids = [self.vocab['word2id'][word] for word in words if word in self.vocab['word2id']]
+        return token_ids, entity_ids, movie_ids, word_ids
