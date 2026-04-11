@@ -185,6 +185,9 @@ class KGSFSystem(BaseSystem):
         self.train_conversation()
 
     def interact(self):
+        import nltk
+        nltk.download('punkt', quiet=True)
+        nltk.download('punkt_tab', quiet=True)
         self.init_interact()
         dataloader = get_dataloader(self.opt, None, self.vocab)
         input_text = self.get_input(self.language)
@@ -211,7 +214,7 @@ class KGSFSystem(BaseSystem):
             print("[Recommend]:")
             for item_id in item_ids:
                 if item_id in self.id2entity:
-                    print(self.id2entity[item_id])
+                    print(self._format_entity(self.id2entity[item_id]))
 
             # Conversation
             conv_data = {
@@ -223,7 +226,8 @@ class KGSFSystem(BaseSystem):
                           for ele in dataloader.conv_interact(conv_data)]
             with torch.no_grad():
                 preds = self.model.forward(conv_batch, 'conv', 'test')
-            preds = preds.tolist()[0]
+            # preds[0] starts with the prepended START token — skip it
+            preds = preds.tolist()[0][1:]
             p_str = ind2txt(preds, self.ind2tok, self.end_token_idx)
             resp_token_ids, resp_entity_ids, resp_movie_ids, resp_word_ids = self._convert_to_id(p_str)
             self.update_context('conv', resp_token_ids, resp_entity_ids, resp_movie_ids, resp_word_ids)
@@ -241,3 +245,9 @@ class KGSFSystem(BaseSystem):
         movie_ids = [eid for eid in entity_ids if eid in self.item_ids]
         word_ids = [self.vocab['word2id'][word] for word in words if word in self.vocab['word2id']]
         return token_ids, entity_ids, movie_ids, word_ids
+
+    def _format_entity(self, entity_uri):
+        """Convert a DBpedia URI like <http://dbpedia.org/resource/Fight_Club> to 'Fight Club'."""
+        name = entity_uri.rstrip('>').split('/')[-1]
+        name = name.replace('_', ' ')
+        return name
