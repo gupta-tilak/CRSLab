@@ -350,6 +350,7 @@ class BaseSystem(ABC):
 
     def nltk_tokenize(self, text):
         nltk.download('punkt')
+        nltk.download('punkt_tab')
         return word_tokenize(text)
 
     def bert_tokenize(self, text, path):
