@@ -86,6 +86,11 @@ class ReDialDataset(BaseDataset):
             'vocab_size': len(self.tok2ind),
             'n_entity': self.n_entity,
             'n_word': self.n_word,
+            # Policy vocab: entity-as-topic mappings, present in all tokeniser variants
+            # so that the conv dataloader (gpt2) can resolve ind2topic lookups too.
+            'n_topic': self.n_topic,
+            'ind2topic': self.ind2topic,
+            'pad_topic': self.pad_topic,
         }
         vocab.update(self.special_token_idx)
 
@@ -132,6 +137,21 @@ class ReDialDataset(BaseDataset):
         self.word_kg = open(os.path.join(self.dpath, 'conceptnet_subkg.txt'), 'r', encoding='utf-8')
         logger.debug(
             f"[Load word dictionary and KG from {os.path.join(self.dpath, 'concept2id.json')} and {os.path.join(self.dpath, 'conceptnet_subkg.txt')}]")
+
+        # Build topic vocabulary for policy component.
+        # ReDial lacks explicit topic annotations, so we use movie entities as proxy topics:
+        # each entity_id maps to the whitespace-tokenised string of its DBpedia name.
+        # ind2topic stores raw string tokens; the dataloader converts them via tok2ind at
+        # batch time, so this mapping is reusable across all tokenisers (bert / gpt2 / nltk).
+        self.ind2topic = {}
+        for entity_name, entity_id in self.entity2id.items():
+            # "The_Dark_Knight_(film)" -> ["The", "Dark", "Knight", "film"]
+            clean = entity_name.replace('_', ' ').replace('(', '').replace(')', '').strip()
+            tokens = [t for t in clean.split() if t]
+            self.ind2topic[entity_id] = tokens if tokens else [entity_name]
+        self.n_topic = self.n_entity   # topic space == entity space
+        self.pad_topic = 0
+        logger.debug(f"[Built topic vocabulary with {self.n_topic} topics from entity dictionary]")
 
     def _data_preprocess(self, train_data, valid_data, test_data):
         processed_train_data = self._raw_data_process(train_data)
@@ -180,10 +200,40 @@ class ReDialDataset(BaseDataset):
     def _augment_and_add(self, raw_conv_dict):
         augmented_conv_dicts = []
         context_tokens, context_entities, context_words, context_items = [], [], [], []
+        # context_policy: per-turn list of [(action_type, [entity_ids])] used by policy_batchify
+        context_policy = []
         entity_set, word_set = set(), set()
+        # n_sent must match TGPolicyModel's n_sent (default 10) so that
+        # policy_batchify can reshape user_profile to (bs, n_sent, hidden).
+        n_sent = 10
+
         for i, conv in enumerate(raw_conv_dict):
             text_tokens, entities, movies, words = conv["text"], conv["entity"], conv["movie"], conv["word"]
             if len(context_tokens) > 0:
+                # --- policy fields ---
+                # target: movies mentioned in the current response become the policy target.
+                # policy_process_fn iterates target[*][1] and creates one sample per topic.
+                # An empty inner list simply produces no policy training samples for this turn.
+                target = [(1, movies)] if movies else [(1, [])]
+
+                # final: the "destination" topic for this dialogue turn.
+                # We use the most-recently-recommended movie, falling back to context_items.
+                if movies:
+                    recent_items = movies
+                elif context_items:
+                    recent_items = context_items[-1:]
+                else:
+                    recent_items = []
+                final = (1, recent_items[-1:]) if recent_items else (1, [])
+
+                # user_profile: exactly n_sent tokenised utterances representing user history.
+                # policy_batchify calls batch_user_profile.extend(conv_dict['user_profile']),
+                # so the list must contain exactly n_sent items.
+                profile_utts = list(context_tokens)[-n_sent:]
+                while len(profile_utts) < n_sent:
+                    profile_utts = [[self.unk_token_idx]] + profile_utts
+                user_profile = profile_utts[:n_sent]
+
                 conv_dict = {
                     "role": conv['role'],
                     "context_tokens": copy(context_tokens),
@@ -192,8 +242,17 @@ class ReDialDataset(BaseDataset):
                     "context_words": copy(context_words),
                     "context_items": copy(context_items),
                     "items": movies,
+                    # Policy fields
+                    "target": target,
+                    "final": final,
+                    "context_policy": copy(context_policy),
+                    "user_profile": user_profile,
                 }
                 augmented_conv_dicts.append(conv_dict)
+
+            # Track this turn's movie recommendations as the policy for subsequent turns.
+            turn_policy = [(1, movies)] if movies else []
+            context_policy.append(turn_policy)
 
             context_tokens.append(text_tokens)
             context_items += movies
