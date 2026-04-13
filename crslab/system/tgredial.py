@@ -166,11 +166,12 @@ class TGReDialSystem(BaseSystem):
             raise
 
     def train_recommender(self):
-        if hasattr(self.rec_model, 'bert'):
-            if os.environ["CUDA_VISIBLE_DEVICES"] == '-1':
-                bert_param = list(self.rec_model.bert.named_parameters())
-            else:
-                bert_param = list(self.rec_model.module.bert.named_parameters())
+        # Unwrap DataParallel if present; otherwise use the model directly.
+        # The old code branched on CUDA_VISIBLE_DEVICES==-1, which fails on a
+        # single-GPU run where the model is never wrapped in nn.DataParallel.
+        inner_rec = self.rec_model.module if hasattr(self.rec_model, 'module') else self.rec_model
+        if hasattr(inner_rec, 'bert'):
+            bert_param = list(inner_rec.bert.named_parameters())
             bert_param_name = ['bert.' + n for n, p in bert_param]
         else:
             bert_param = []
