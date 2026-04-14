@@ -13,7 +13,7 @@ import torch
 from loguru import logger
 from math import floor
 
-from crslab.config import PRETRAIN_PATH
+from crslab.config import PRETRAIN_PATH, SAVE_PATH
 from crslab.data import get_dataloader, dataset_language_map
 from crslab.evaluator.metrics.base import AverageMetric
 from crslab.evaluator.metrics.gen import PPLMetric
@@ -284,13 +284,89 @@ class TGReDialSystem(BaseSystem):
                 self.step(batch, stage='policy', mode='test')
             self.evaluator.report(mode='test')
 
+    # ------------------------------------------------------------------
+    # Per-stage checkpoint helpers
+    # ------------------------------------------------------------------
+
+    def _stage_ckpt_path(self, stage):
+        """Return the checkpoint file path for a single training stage."""
+        return os.path.join(SAVE_PATH, f'{self.opt["model_name"]}_{stage}.pth')
+
+    def _save_stage_model(self, stage):
+        """Save one model's weights to its own checkpoint file."""
+        attr = f'{stage}_model'
+        ckpt = {f'{stage}_state_dict': getattr(self, attr).state_dict()}
+        os.makedirs(SAVE_PATH, exist_ok=True)
+        path = self._stage_ckpt_path(stage)
+        torch.save(ckpt, path)
+        logger.info(f'[Saved {stage} model → {path}]')
+
+    def _offload_stage_model(self, stage):
+        """Move a model to CPU and release GPU memory for the next stage."""
+        getattr(self, f'{stage}_model').to('cpu')
+        if hasattr(self, 'optimizer'):
+            del self.optimizer
+        torch.cuda.empty_cache()
+        logger.info(f'[Offloaded {stage} model to CPU, CUDA cache cleared]')
+
+    def _restore_stage_model(self, stage):
+        """Reload a stage checkpoint back onto the training device."""
+        path = self._stage_ckpt_path(stage)
+        if not os.path.exists(path):
+            logger.warning(f'[No checkpoint for {stage} at {path}, skipping restore]')
+            return
+        ckpt = torch.load(path, map_location=self.device)
+        getattr(self, f'{stage}_model').load_state_dict(ckpt[f'{stage}_state_dict'])
+        getattr(self, f'{stage}_model').to(self.device)
+        logger.info(f'[Restored {stage} model from {path}]')
+
+    # ------------------------------------------------------------------
+    # Main training loop
+    # ------------------------------------------------------------------
+
     def fit(self):
+        """Train rec → policy → conv sequentially.
+
+        Each model is the *only* model resident on GPU while it trains.
+        After training its weights are written to a dedicated checkpoint
+        file and the model is moved back to CPU so the next stage starts
+        with a clean GPU budget.  All three checkpoints are reloaded at
+        the end so the system is ready for inference / interact().
+        """
+        # Move every model to CPU up front; each stage will bring its own
+        # model to the GPU, train, save, then offload before the next stage.
+        trained_stages = []
+        for attr in ('rec_model', 'policy_model', 'conv_model'):
+            if hasattr(self, attr):
+                getattr(self, attr).to('cpu')
+        torch.cuda.empty_cache()
+
         if hasattr(self, 'rec_model'):
+            self.rec_model.to(self.device)
             self.train_recommender()
+            self._save_stage_model('rec')
+            self._offload_stage_model('rec')
+            trained_stages.append('rec')
+
         if hasattr(self, 'policy_model'):
+            self.policy_model.to(self.device)
             self.train_policy()
+            self._save_stage_model('policy')
+            self._offload_stage_model('policy')
+            trained_stages.append('policy')
+
         if hasattr(self, 'conv_model'):
+            self.conv_model.to(self.device)
             self.train_conversation()
+            self._save_stage_model('conv')
+            self._offload_stage_model('conv')
+            trained_stages.append('conv')
+
+        # Reload all trained models back to GPU so interact() and any
+        # post-fit evaluation can run with the full trained system.
+        logger.info('[Reloading all stage checkpoints for inference]')
+        for stage in trained_stages:
+            self._restore_stage_model(stage)
 
     def interact(self):
         self.init_interact()
