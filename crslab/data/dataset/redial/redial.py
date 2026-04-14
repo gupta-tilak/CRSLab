@@ -203,9 +203,12 @@ class ReDialDataset(BaseDataset):
         # context_policy: per-turn list of [(action_type, [entity_ids])] used by policy_batchify
         context_policy = []
         entity_set, word_set = set(), set()
-        # n_sent must match TGPolicyModel's n_sent (default 10) so that
-        # policy_batchify can reshape user_profile to (bs, n_sent, hidden).
-        n_sent = 10
+        # n_sent must match the n_sent value in the config (and TGPolicyModel).
+        # Keep it small to limit profile_bert's effective batch size
+        # (profile_bert sees batch_size * n_sent sequences per step).
+        # Truncate each profile sentence to 32 tokens to cap activation memory further.
+        n_sent = 3
+        profile_utt_max_len = 32
 
         for i, conv in enumerate(raw_conv_dict):
             text_tokens, entities, movies, words = conv["text"], conv["entity"], conv["movie"], conv["word"]
@@ -229,7 +232,9 @@ class ReDialDataset(BaseDataset):
                 # user_profile: exactly n_sent tokenised utterances representing user history.
                 # policy_batchify calls batch_user_profile.extend(conv_dict['user_profile']),
                 # so the list must contain exactly n_sent items.
-                profile_utts = list(context_tokens)[-n_sent:]
+                # Each sentence is capped at profile_utt_max_len tokens to keep the
+                # profile_bert tensor (batch_size * n_sent, max_len) from OOM on small GPUs.
+                profile_utts = [utt[:profile_utt_max_len] for utt in context_tokens[-n_sent:]]
                 while len(profile_utts) < n_sent:
                     profile_utts = [[self.unk_token_idx]] + profile_utts
                 user_profile = profile_utts[:n_sent]
