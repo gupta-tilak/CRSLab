@@ -7,6 +7,7 @@
 # @Author : Xiaolei Wang
 # @Email  : wxl1999@foxmail.com
 
+import gc
 import os
 
 import torch
@@ -302,11 +303,42 @@ class TGReDialSystem(BaseSystem):
         logger.info(f'[Saved {stage} model → {path}]')
 
     def _offload_stage_model(self, stage):
-        """Move a model to CPU and release GPU memory for the next stage."""
-        getattr(self, f'{stage}_model').to('cpu')
+        """Move a model to CPU and release GPU memory for the next stage.
+
+        Merely calling ``del self.optimizer`` is not enough: the exp_avg /
+        exp_avg_sq tensors inside AdamW stay live on CUDA until Python's GC
+        cycle actually runs.  We therefore:
+          1. Zero gradients (frees .grad buffers on GPU).
+          2. Explicitly clear the optimizer state dict so the CUDA tensors
+             are dereferenced *before* we call empty_cache().
+          3. Delete the optimizer and any LR scheduler.
+          4. Move model weights to CPU.
+          5. Force a full GC cycle to break any reference cycles.
+          6. Tell the CUDA allocator to release unreferenced blocks.
+        """
+        model = getattr(self, f'{stage}_model')
+
+        # 1. Free gradient buffers that are still on GPU.
+        model.zero_grad(set_to_none=True)
+
+        # 2 & 3. Wipe optimizer state tensors explicitly, then drop the object.
         if hasattr(self, 'optimizer'):
+            self.optimizer.state.clear()
             del self.optimizer
+
+        # Also drop the LR scheduler if one was created for this stage.
+        if hasattr(self, 'scheduler'):
+            del self.scheduler
+
+        # 4. Move model parameters & buffers to CPU.
+        model.to('cpu')
+
+        # 5. Run Python GC to free any cyclic structures keeping CUDA tensors alive.
+        gc.collect()
+
+        # 6. Return all allocator-held but unreferenced blocks to the CUDA driver.
         torch.cuda.empty_cache()
+
         logger.info(f'[Offloaded {stage} model to CPU, CUDA cache cleared]')
 
     def _restore_stage_model(self, stage):
