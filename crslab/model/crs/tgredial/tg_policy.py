@@ -55,6 +55,16 @@ class TGPolicyModel(BaseModel):
         self.topic_bert = BertModel.from_pretrained(self.dpath)
         self.profile_bert = BertModel.from_pretrained(self.dpath)
 
+        # Three BERT encoders produce ~1.8 GB of saved activations during a
+        # forward pass with autograd.  Gradient checkpointing recomputes
+        # activations on-the-fly during backward instead of caching them,
+        # saving ~1.5–1.8 GB at the cost of ~30 % extra compute.  This is
+        # essential to keep peak memory below 8 GB on small GPUs.
+        # Controlled by config flag 'gradient_checkpointing' (default True).
+        if self.opt.get('gradient_checkpointing', True):
+            for bert in (self.context_bert, self.topic_bert, self.profile_bert):
+                bert.gradient_checkpointing_enable()
+
         self.bert_hidden_size = self.context_bert.config.hidden_size
         self.state2topic_id = nn.Linear(self.bert_hidden_size * 3,
                                         self.topic_class_num)
